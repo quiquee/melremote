@@ -4,13 +4,37 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Gemini Chat</title>
-    <link rel="stylesheet" href="styles.css">
+    <style>
+        body { font-family: Arial, sans-serif; background-color: #f4f4f4; }
+        .chat-container { width: 300px; margin: 50px auto; padding: 20px; border: 1px solid #ccc; background: #fff; }
+        .message { margin: 10px 0; }
+        .message p { margin: 0; }
+    </style>
 </head>
 <body>
-    <h1>Welcome to Gemini Chat</h1>
-    <div id="chat-container">
-        <!-- Chat implementation goes here -->
+    <div class="chat-container">
+        <h2>Gemini Chat</h2>
+        <div id="chat-box">
+            <div class="message"><p>User1: Hello!</p></div>
+            <div class="message"><p>User2: Hi there!</p></div>
+        </div>
+        <input type="text" id="message-input" placeholder="Type your message...">
+        <button id="send-button">Send</button>
     </div>
-    <script src="chat.js"></script>
+    <script>
+        const sendButton = document.getElementById('send-button');
+        const messageInput = document.getElementById('message-input');
+        const chatBox = document.getElementById('chat-box');
+        sendButton.addEventListener('click', () => {
+            const message = messageInput.value;
+            if (message) {
+                const newMessage = document.createElement('div');
+                newMessage.classList.add('message');
+                newMessage.innerHTML = `<p>User1: ${message}</p>`;
+                chatBox.appendChild(newMessage);
+                messageInput.value = '';
+            }
+        });
+    </script>
 </body>
 </html>

@@ -368,11 +368,7 @@
             <div class="model-selector-container">
                 <label class="model-selector-label">Model:</label>
                 <select class="model-selector" id="modelSelector">
-                    <option value="gemini-2.5-flash">Gemini 2.5 Flash (Recommended)</option>
-                    <option value="gemini-2.5-flash-lite">Gemini 2.5 Flash Lite (Fast)</option>
-                    <option value="gemini-2.5-pro">Gemini 2.5 Pro (Advanced)</option>
-                    <option value="gemini-2.0-flash">Gemini 2.0 Flash</option>
-                    <option value="gemini-2.0-flash-lite">Gemini 2.0 Flash Lite</option>
+                    <option value="">-- Save API key to load models --</option>
                 </select>
             </div>
             <div class="api-status" id="apiStatus">No API key configured</div>
@@ -401,10 +397,8 @@
     </div>
 
     <script>
-        const API_BASE_URL = 'https://generativelanguage.googleapis.com/v1beta/models/';
-
         let apiKey = localStorage.getItem('gemini_api_key') || '';
-        let selectedModel = localStorage.getItem('gemini_model') || 'gemini-2.5-flash';
+        let selectedModel = localStorage.getItem('gemini_model') || '';
         let conversationHistory = [];
 
         const elements = {
@@ -423,10 +417,8 @@
                 elements.apiKeyInput.value = apiKey;
                 updateApiStatus(true);
                 enableChat();
+                fetchModels();
             }
-
-            // Set saved model
-            elements.modelSelector.value = selectedModel;
 
             elements.saveKeyBtn.addEventListener('click', saveApiKey);
             elements.sendBtn.addEventListener('click', sendMessage);
@@ -440,8 +432,48 @@
             localStorage.setItem('gemini_model', selectedModel);
         }
 
-        function getApiEndpoint() {
-            return `${API_BASE_URL}${selectedModel}:generateContent`;
+        async function fetchModels() {
+            if (!apiKey) return;
+
+            elements.modelSelector.innerHTML = '<option value="">Loading models...</option>';
+
+            try {
+                const response = await fetch(`/api/models?key=${encodeURIComponent(apiKey)}`);
+                const data = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(data.error || 'Failed to fetch models');
+                }
+
+                const models = data.models;
+                if (!models || models.length === 0) {
+                    elements.modelSelector.innerHTML = '<option value="">No models available</option>';
+                    return;
+                }
+
+                elements.modelSelector.innerHTML = '';
+                models.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model.id;
+                    option.textContent = model.displayName;
+                    elements.modelSelector.appendChild(option);
+                });
+
+                // Restore previously selected model if still available
+                const savedModel = localStorage.getItem('gemini_model');
+                if (savedModel && models.some(m => m.id === savedModel)) {
+                    elements.modelSelector.value = savedModel;
+                    selectedModel = savedModel;
+                } else {
+                    selectedModel = models[0].id;
+                    localStorage.setItem('gemini_model', selectedModel);
+                }
+
+            } catch (error) {
+                elements.modelSelector.innerHTML = '<option value="">Error loading models</option>';
+                elements.apiStatus.textContent = `Model loading failed: ${error.message}`;
+                elements.apiStatus.className = 'api-status';
+            }
         }
 
         function saveApiKey() {
@@ -452,13 +484,14 @@
                 updateApiStatus(true);
                 enableChat();
                 clearEmptyState();
+                fetchModels();
             } else {
                 alert('Please enter a valid API key');
             }
         }
 
         function updateApiStatus(active) {
-            elements.apiStatus.textContent = active ? 'API key configured ✓' : 'No API key configured';
+            elements.apiStatus.textContent = active ? 'API key configured' : 'No API key configured';
             elements.apiStatus.className = active ? 'api-status active' : 'api-status';
         }
 
@@ -489,7 +522,7 @@
 
         async function sendMessage() {
             const message = elements.messageInput.value.trim();
-            if (!message || !apiKey) return;
+            if (!message || !apiKey || !selectedModel) return;
 
             clearEmptyState();
 
@@ -577,12 +610,14 @@
         }
 
         async function callGeminiAPI(message) {
-            const response = await fetch(`${getApiEndpoint()}?key=${apiKey}`, {
+            const response = await fetch('/api/chat', {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
                 body: JSON.stringify({
+                    model: selectedModel,
+                    key: apiKey,
                     contents: [{
                         parts: [{
                             text: message
@@ -593,7 +628,7 @@
 
             if (!response.ok) {
                 const error = await response.json();
-                throw new Error(error.error?.message || 'Failed to get response from Gemini API');
+                throw new Error(error.error?.message || error.error || 'Failed to get response');
             }
 
             const data = await response.json();

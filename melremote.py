@@ -21,6 +21,11 @@ def serve_index():
     return send_from_directory(BASE_DIR, "index.html")
 
 
+@app.route("/favicon.ico")
+def serve_favicon():
+    return send_from_directory(BASE_DIR, "favicon.ico", mimetype="image/svg+xml")
+
+
 @app.route("/api/models")
 def list_models():
     api_key = request.args.get("key")

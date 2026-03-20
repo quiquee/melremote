@@ -1,14 +1,19 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
+#   "cryptography",
 #   "flask",
 #   "requests",
 # ]
 # ///
 
+import base64
+import hashlib
+import json
 import os
 
 import requests as req
+from cryptography.fernet import Fernet
 from flask import Flask, jsonify, request, send_from_directory
 
 app = Flask(__name__)
@@ -25,6 +30,38 @@ def serve_index():
 def serve_favicon():
     return send_from_directory(BASE_DIR, "favicon.ico", mimetype="image/svg+xml")
 
+
+
+def get_fernet(api_key: str) -> Fernet:
+    key_bytes = hashlib.sha256(api_key.encode()).digest()
+    fernet_key = base64.urlsafe_b64encode(key_bytes)
+    return Fernet(fernet_key)
+
+@app.route("/api/history")
+def get_history():
+    api_key = request.args.get("key")
+    if not api_key:
+        return jsonify({"error": "API key is required"}), 400
+
+    history = []
+    log_file = os.path.join(BASE_DIR, "chat_history.log")
+    if os.path.exists(log_file):
+        try:
+            f = get_fernet(api_key)
+            with open(log_file, "r") as file:
+                for line in file:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        decrypted = f.decrypt(line.encode()).decode()
+                        history.append(json.loads(decrypted))
+                    except Exception:
+                        pass
+        except Exception as e:
+            return jsonify({"error": str(e)}), 500
+
+    return jsonify({"history": history[-50:]})
 
 @app.route("/api/models")
 def list_models():
@@ -100,6 +137,28 @@ def chat():
             headers={"Content-Type": "application/json"},
             timeout=120,
         )
+
+        if resp.status_code == 200:
+            try:
+                data = resp.json()
+                if "candidates" in data and data["candidates"]:
+                    # extract the latest text
+                    prompt_text = contents[-1]["parts"][0]["text"]
+                    response_text = data["candidates"][0]["content"]["parts"][0]["text"]
+                    
+                    interaction = {
+                        "prompt": prompt_text,
+                        "response": response_text
+                    }
+                    
+                    f = get_fernet(api_key)
+                    encrypted = f.encrypt(json.dumps(interaction).encode()).decode()
+                    
+                    with open(os.path.join(BASE_DIR, "chat_history.log"), "a") as log_file:
+                        log_file.write(encrypted + "\n")
+            except Exception as e:
+                print(f"Error logging chat: {e}")
+
         return (resp.text, resp.status_code, {"Content-Type": "application/json"})
 
     except req.exceptions.Timeout:

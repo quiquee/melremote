@@ -112,16 +112,40 @@
         }
 
         .side-bar-header {
-            padding: 10px 20px;
+            padding: 10px 10px 10px 20px;
             font-size: 11px;
             font-weight: 600;
             letter-spacing: 1px;
             color: #bbbbbb;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+        }
+
+        .new-session-btn {
+            background: transparent;
+            border: none;
+            color: #858585;
+            cursor: pointer;
+            padding: 3px 6px;
+            font-size: 13px;
+            border-radius: 3px;
+            line-height: 1;
+        }
+
+        .new-session-btn:hover {
+            color: #cccccc;
+            background: #37373d;
         }
 
         .explorer-content {
             padding: 0 10px;
+            overflow-y: auto;
+            flex: 1;
         }
+
+        .explorer-content::-webkit-scrollbar { width: 6px; }
+        .explorer-content::-webkit-scrollbar-thumb { background: #424242; }
 
         .folder {
             font-size: 13px;
@@ -147,6 +171,7 @@
             padding: 4px 5px;
             cursor: pointer;
             color: #cccccc;
+            border-radius: 3px;
         }
 
         .file-item:hover {
@@ -156,6 +181,37 @@
         .file-item.active {
             background: #37373d;
             color: #ffffff;
+        }
+
+        .file-item span {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+            flex: 1;
+            min-width: 0;
+        }
+
+        /* Session tooltip */
+        .session-tooltip-popup {
+            display: none;
+            position: fixed;
+            background: #2d2d2d;
+            border: 1px solid #454545;
+            padding: 8px 12px;
+            font-size: 12px;
+            color: #cccccc;
+            z-index: 1000;
+            max-width: 240px;
+            border-radius: 3px;
+            box-shadow: 2px 4px 12px rgba(0,0,0,0.5);
+            pointer-events: none;
+            line-height: 1.5;
+        }
+
+        .tooltip-date {
+            color: #858585;
+            font-size: 11px;
+            margin-bottom: 4px;
         }
 
         /* Editor Area */
@@ -368,27 +424,19 @@
         </div>
 
         <div class="side-bar">
-            <div class="side-bar-header">EXPLORER</div>
+            <div class="side-bar-header">
+                EXPLORER
+                <button class="new-session-btn" id="newSessionBtn" title="New Chat Session">
+                    <i class="fa-solid fa-plus"></i>
+                </button>
+            </div>
             <div class="explorer-content">
                 <div class="folder">
                     <div class="folder-header">
                         <i class="fa-solid fa-chevron-down"></i>
-                        <span>MELREMOTE</span>
+                        <span>SESSIONS</span>
                     </div>
-                    <div class="file-list">
-                        <div class="file-item active">
-                            <i class="fa-regular fa-message" style="color: #66b2ff;"></i>
-                            <span>Gemini Chat</span>
-                        </div>
-                        <div class="file-item">
-                            <i class="fa-brands fa-html5" style="color: #e34c26;"></i>
-                            <span>index.html</span>
-                        </div>
-                        <div class="file-item">
-                            <i class="fa-brands fa-python" style="color: #3776ab;"></i>
-                            <span>melremote.py</span>
-                        </div>
-                    </div>
+                    <div class="file-list" id="sessionList"></div>
                 </div>
             </div>
         </div>
@@ -397,11 +445,11 @@
             <div class="editor-tabs">
                 <div class="tab active">
                     <i class="fa-regular fa-message" style="color: #66b2ff;"></i>
-                    Gemini Chat
+                    <span id="tabTitle">New Chat</span>
                     <i class="fa-solid fa-xmark" style="margin-left: 5px; font-size: 10px;"></i>
                 </div>
             </div>
-            
+
             <div class="editor-content">
                 <div class="chat-config">
                     <input type="password" class="vscode-input" id="apiKeyInput" placeholder="Enter Gemini API Key">
@@ -412,14 +460,7 @@
                     <span id="apiStatus" style="font-size: 12px; color: #858585;">No API key</span>
                 </div>
 
-                <div class="chat-messages" id="chatContainer">
-                    <div class="message assistant">
-                        <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
-                        <div class="message-content">
-                            Hello! I am Gemini, your AI assistant. Enter your API key above to start chatting!
-                        </div>
-                    </div>
-                </div>
+                <div class="chat-messages" id="chatContainer"></div>
 
                 <div class="chat-input-area">
                     <textarea class="chat-input" id="messageInput" rows="1" placeholder="Ask Gemini something... (Press Enter to send)" disabled></textarea>
@@ -443,9 +484,16 @@
         </div>
     </div>
 
+    <!-- Global session tooltip -->
+    <div id="sessionTooltip" class="session-tooltip-popup"></div>
+
     <script>
         let apiKey = localStorage.getItem('gemini_api_key') || '';
         let selectedModel = localStorage.getItem('gemini_model') || '';
+        let currentSessionId = null;
+
+        const SESSIONS_KEY = 'gemini_sessions';
+        const CURRENT_SESSION_KEY = 'gemini_current_session';
 
         const elements = {
             apiKeyInput: document.getElementById('apiKeyInput'),
@@ -453,23 +501,178 @@
             apiStatus: document.getElementById('apiStatus'),
             chatContainer: document.getElementById('chatContainer'),
             messageInput: document.getElementById('messageInput'),
-            modelSelector: document.getElementById('modelSelector')
+            modelSelector: document.getElementById('modelSelector'),
+            sessionList: document.getElementById('sessionList'),
+            tabTitle: document.getElementById('tabTitle'),
+            newSessionBtn: document.getElementById('newSessionBtn'),
+            tooltip: document.getElementById('sessionTooltip')
         };
 
-        function init() {
-            if (apiKey) {
-                elements.apiKeyInput.value = apiKey;
-                updateApiStatus(true);
-                enableChat();
-                fetchModels();
-                fetchHistory(); // Fetch on init
+        // --- Session storage helpers ---
+
+        function getSessions() {
+            try { return JSON.parse(localStorage.getItem(SESSIONS_KEY) || '[]'); }
+            catch { return []; }
+        }
+
+        function saveSessions(sessions) {
+            localStorage.setItem(SESSIONS_KEY, JSON.stringify(sessions));
+        }
+
+        function getCurrentSession() {
+            return getSessions().find(s => s.id === currentSessionId) || null;
+        }
+
+        function createSession() {
+            const sessions = getSessions();
+            const session = {
+                id: 'session_' + Date.now(),
+                createdAt: new Date().toISOString(),
+                initialPrompt: null,
+                messages: []
+            };
+            sessions.push(session);
+            saveSessions(sessions);
+            return session;
+        }
+
+        function saveMessageToSession(content, role) {
+            const sessions = getSessions();
+            const idx = sessions.findIndex(s => s.id === currentSessionId);
+            if (idx === -1) return;
+            sessions[idx].messages.push({ role, content });
+            if (role === 'user' && !sessions[idx].initialPrompt) {
+                sessions[idx].initialPrompt = content;
+            }
+            saveSessions(sessions);
+        }
+
+        // --- Sidebar rendering ---
+
+        function renderSidebar() {
+            const sessions = getSessions();
+            elements.sessionList.innerHTML = '';
+
+            [...sessions].reverse().forEach(session => {
+                const name = session.initialPrompt
+                    ? session.initialPrompt.substring(0, 24) + (session.initialPrompt.length > 24 ? '…' : '')
+                    : 'New Chat';
+
+                const item = document.createElement('div');
+                item.className = 'file-item' + (session.id === currentSessionId ? ' active' : '');
+                item.innerHTML = `
+                    <i class="fa-regular fa-message" style="color:#66b2ff;flex-shrink:0;"></i>
+                    <span>${escapeHtml(name)}</span>
+                `;
+                item.addEventListener('click', () => switchToSession(session.id));
+                item.addEventListener('mouseenter', e => showTooltip(e, session));
+                item.addEventListener('mouseleave', hideTooltip);
+                elements.sessionList.appendChild(item);
+            });
+        }
+
+        function updateTab() {
+            const session = getCurrentSession();
+            const name = session && session.initialPrompt
+                ? session.initialPrompt.substring(0, 22) + (session.initialPrompt.length > 22 ? '…' : '')
+                : 'New Chat';
+            elements.tabTitle.textContent = name;
+        }
+
+        // --- Tooltip ---
+
+        function showTooltip(event, session) {
+            const date = new Date(session.createdAt).toLocaleString();
+            const prompt = session.initialPrompt
+                ? escapeHtml(session.initialPrompt.substring(0, 100) + (session.initialPrompt.length > 100 ? '…' : ''))
+                : 'Empty session';
+            elements.tooltip.innerHTML = `<div class="tooltip-date">${date}</div><div>${prompt}</div>`;
+            elements.tooltip.style.display = 'block';
+            const rect = event.currentTarget.getBoundingClientRect();
+            elements.tooltip.style.left = (rect.right + 8) + 'px';
+            elements.tooltip.style.top = rect.top + 'px';
+        }
+
+        function hideTooltip() {
+            elements.tooltip.style.display = 'none';
+        }
+
+        // --- Session switching ---
+
+        function switchToSession(id) {
+            currentSessionId = id;
+            localStorage.setItem(CURRENT_SESSION_KEY, id);
+            elements.chatContainer.innerHTML = '';
+
+            const session = getCurrentSession();
+            if (session && session.messages.length > 0) {
+                session.messages.forEach(msg => displayMessage(msg.content, msg.role));
+            } else {
+                displayWelcomeMessage();
             }
 
-            elements.saveKeyBtn.addEventListener('click', saveApiKey);
-            elements.messageInput.addEventListener('keydown', handleKeyDown);
-            elements.messageInput.addEventListener('input', autoResize);
-            elements.modelSelector.addEventListener('change', handleModelChange);
+            elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+            renderSidebar();
+            updateTab();
         }
+
+        // --- Message rendering ---
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.appendChild(document.createTextNode(text));
+            return d.innerHTML;
+        }
+
+        function formatMarkdown(text) {
+            let f = text.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+            f = f.replace(/`([^`]+)`/g, '<code style="background:#2d2d2d;padding:2px 4px;border-radius:3px;">$1</code>');
+            f = f.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+            f = f.replace(/\n/g, '<br>');
+            return f;
+        }
+
+        function displayMessage(content, role) {
+            const div = document.createElement('div');
+            div.className = `message ${role}`;
+            div.innerHTML = `
+                <div class="message-avatar"><i class="fa-solid ${role === 'user' ? 'fa-user' : 'fa-robot'}"></i></div>
+                <div class="message-content">${role === 'user' ? escapeHtml(content) : formatMarkdown(content)}</div>
+            `;
+            elements.chatContainer.appendChild(div);
+        }
+
+        function addMessage(content, role) {
+            const isFirst = role === 'user' && !getCurrentSession()?.initialPrompt;
+            saveMessageToSession(content, role);
+            displayMessage(content, role);
+            elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+            if (isFirst) { renderSidebar(); updateTab(); }
+        }
+
+        function displayWelcomeMessage() {
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.innerHTML = `
+                <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+                <div class="message-content">Hello! I am Gemini, your AI assistant. Enter your API key above to start chatting!</div>
+            `;
+            elements.chatContainer.appendChild(div);
+        }
+
+        function addLoading(id) {
+            const div = document.createElement('div');
+            div.className = 'message assistant';
+            div.id = id;
+            div.innerHTML = `
+                <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
+                <div class="message-content" style="color:#858585;"><i class="fa-solid fa-circle-notch fa-spin"></i> Thinking...</div>
+            `;
+            elements.chatContainer.appendChild(div);
+            elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+        }
+
+        // --- API ---
 
         function handleModelChange(e) {
             selectedModel = e.target.value;
@@ -482,14 +685,9 @@
             try {
                 const response = await fetch(`/api/models?key=${encodeURIComponent(apiKey)}`);
                 const text = await response.text();
-                
                 let data;
-                try {
-                    data = JSON.parse(text);
-                } catch (e) {
-                    throw new Error(`Server returned non-JSON response (Status: ${response.status}): ${text.substring(0, 50)}...`);
-                }
-
+                try { data = JSON.parse(text); }
+                catch { throw new Error(`Server returned non-JSON response (Status: ${response.status}): ${text.substring(0, 50)}...`); }
                 if (!response.ok) throw new Error(data.error || 'Failed to fetch models');
 
                 elements.modelSelector.innerHTML = '';
@@ -499,39 +697,14 @@
                     option.textContent = model.displayName;
                     elements.modelSelector.appendChild(option);
                 });
-
                 if (selectedModel && data.models.some(m => m.id === selectedModel)) {
                     elements.modelSelector.value = selectedModel;
                 } else {
                     selectedModel = data.models[0].id;
                     localStorage.setItem('gemini_model', selectedModel);
                 }
-            } catch (error) {
+            } catch {
                 elements.modelSelector.innerHTML = '<option value="">Error loading</option>';
-            }
-        }
-
-
-        async function fetchHistory() {
-            if (!apiKey) return;
-            try {
-                const response = await fetch(`/api/history?key=${encodeURIComponent(apiKey)}`);
-                const text = await response.text();
-                let data;
-                try {
-                    data = JSON.parse(text);
-                } catch (e) {
-                    throw new Error(`Server returned non-JSON response`);
-                }
-                if (data.history && data.history.length > 0) {
-                    elements.chatContainer.innerHTML = '';
-                    data.history.forEach(item => {
-                        addMessage(item.prompt, 'user');
-                        addMessage(item.response, 'assistant');
-                    });
-                }
-            } catch (error) {
-                console.error("Error loading chat history:", error);
             }
         }
 
@@ -543,7 +716,6 @@
                 updateApiStatus(true);
                 enableChat();
                 fetchModels();
-                fetchHistory();
             }
         }
 
@@ -590,20 +762,14 @@
                         contents: [{ parts: [{ text: message }] }]
                     })
                 });
-                
                 const text = await response.text();
                 let data;
-                try {
-                    data = JSON.parse(text);
-                } catch (e) {
-                    throw new Error(`Server returned non-JSON response (Status: ${response.status})`);
-                }
+                try { data = JSON.parse(text); }
+                catch { throw new Error(`Server returned non-JSON response (Status: ${response.status})`); }
 
                 document.getElementById(loadingId).remove();
 
-                if (!response.ok) {
-                    throw new Error(data.error || 'Failed to communicate with API');
-                }
+                if (!response.ok) throw new Error(data.error || 'Failed to communicate with API');
 
                 if (data.candidates && data.candidates[0]?.content?.parts?.[0]?.text) {
                     addMessage(data.candidates[0].content.parts[0].text, 'assistant');
@@ -619,35 +785,42 @@
             elements.messageInput.focus();
         }
 
-        function formatMarkdown(text) {
-            let formatted = text.replace(/```(\w+)?\n([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
-            formatted = formatted.replace(/`([^`]+)`/g, '<code style="background:#2d2d2d;padding:2px 4px;border-radius:3px;">$1</code>');
-            formatted = formatted.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-            formatted = formatted.replace(/\n/g, '<br>');
-            return formatted;
-        }
+        // --- Init ---
 
-        function addMessage(content, role) {
-            const div = document.createElement('div');
-            div.className = `message ${role}`;
-            div.innerHTML = `
-                <div class="message-avatar"><i class="fa-solid ${role === 'user' ? 'fa-user' : 'fa-robot'}"></i></div>
-                <div class="message-content">${role === 'user' ? content : formatMarkdown(content)}</div>
-            `;
-            elements.chatContainer.appendChild(div);
-            elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
-        }
+        function init() {
+            if (apiKey) {
+                elements.apiKeyInput.value = apiKey;
+                updateApiStatus(true);
+                enableChat();
+                fetchModels();
+            }
 
-        function addLoading(id) {
-            const div = document.createElement('div');
-            div.className = 'message assistant';
-            div.id = id;
-            div.innerHTML = `
-                <div class="message-avatar"><i class="fa-solid fa-robot"></i></div>
-                <div class="message-content" style="color:#858585;"><i class="fa-solid fa-circle-notch fa-spin"></i> Thinking...</div>
-            `;
-            elements.chatContainer.appendChild(div);
-            elements.chatContainer.scrollTop = elements.chatContainer.scrollHeight;
+            // Bootstrap sessions
+            let sessions = getSessions();
+            const savedId = localStorage.getItem(CURRENT_SESSION_KEY);
+
+            if (sessions.length === 0) {
+                const s = createSession();
+                currentSessionId = s.id;
+                localStorage.setItem(CURRENT_SESSION_KEY, s.id);
+                displayWelcomeMessage();
+                renderSidebar();
+                updateTab();
+            } else {
+                const id = (savedId && sessions.some(s => s.id === savedId))
+                    ? savedId
+                    : sessions[sessions.length - 1].id;
+                switchToSession(id);
+            }
+
+            elements.saveKeyBtn.addEventListener('click', saveApiKey);
+            elements.messageInput.addEventListener('keydown', handleKeyDown);
+            elements.messageInput.addEventListener('input', autoResize);
+            elements.modelSelector.addEventListener('change', handleModelChange);
+            elements.newSessionBtn.addEventListener('click', () => {
+                const s = createSession();
+                switchToSession(s.id);
+            });
         }
 
         init();
